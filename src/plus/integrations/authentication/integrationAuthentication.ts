@@ -59,7 +59,7 @@ abstract class IntegrationAuthenticationProviderBase<ID extends IntegrationId = 
 		options?: { authorizeIfNeeded?: boolean },
 	): Promise<ProviderAuthenticationSession | undefined>;
 
-	protected abstract deleteAllSecrets(sessionId: string): Promise<void>;
+	protected abstract deleteAllStoredSessions(sessionId: string): Promise<void>;
 
 	protected abstract storeSession(sessionId: string, session: AuthenticationSession): Promise<void>;
 
@@ -68,15 +68,18 @@ abstract class IntegrationAuthenticationProviderBase<ID extends IntegrationId = 
 		ignoreErrors: boolean;
 	}): Promise<StoredSession | undefined>;
 
-	protected async deleteSecret(key: IntegrationAuthenticationKeys) {
+	protected async deleteStoredSession(key: IntegrationAuthenticationKeys) {
 		await this.container.storage.deleteSecret(key);
 	}
 
-	protected async writeSecret(key: IntegrationAuthenticationKeys, session: AuthenticationSession | StoredSession) {
+	protected async writeStoredSession(
+		key: IntegrationAuthenticationKeys,
+		session: AuthenticationSession | StoredSession,
+	) {
 		await this.container.storage.storeSecret(key, JSON.stringify(session));
 	}
 
-	protected async readSecret(
+	protected async readStoredSession(
 		key: IntegrationAuthenticationKeys,
 		ignoreErrors: boolean,
 	): Promise<StoredSession | undefined> {
@@ -88,7 +91,7 @@ abstract class IntegrationAuthenticationProviderBase<ID extends IntegrationId = 
 			}
 		} catch (ex) {
 			try {
-				await this.deleteSecret(key);
+				await this.deleteStoredSession(key);
 			} catch {}
 
 			if (ignoreErrors) {
@@ -109,7 +112,7 @@ abstract class IntegrationAuthenticationProviderBase<ID extends IntegrationId = 
 	@debug()
 	async deleteSession(descriptor?: IntegrationAuthenticationSessionDescriptor): Promise<void> {
 		const sessionId = this.getSessionId(descriptor);
-		await this.deleteAllSecrets(sessionId);
+		await this.deleteAllStoredSessions(sessionId);
 	}
 
 	@debug()
@@ -120,7 +123,7 @@ abstract class IntegrationAuthenticationProviderBase<ID extends IntegrationId = 
 		const sessionId = this.getSessionId(descriptor);
 
 		if (options?.forceNewSession) {
-			await this.deleteAllSecrets(sessionId);
+			await this.deleteAllStoredSessions(sessionId);
 		}
 
 		const storedSession = await this.restoreSession({
@@ -145,12 +148,12 @@ abstract class IntegrationAuthenticationProviderBase<ID extends IntegrationId = 
 export abstract class LocalIntegrationAuthenticationProvider<
 	ID extends IntegrationId = IntegrationId,
 > extends IntegrationAuthenticationProviderBase<ID> {
-	protected override async deleteAllSecrets(sessionId: string) {
-		await this.deleteSecret(this.getLocalSecretKey(sessionId));
+	protected override async deleteAllStoredSessions(sessionId: string) {
+		await this.deleteAllStoredSessions(this.getLocalSecretKey(sessionId));
 	}
 
 	protected override async storeSession(sessionId: string, session: AuthenticationSession) {
-		await this.writeSecret(this.getLocalSecretKey(sessionId), session);
+		await this.writeStoredSession(this.getLocalSecretKey(sessionId), session);
 	}
 
 	protected override async restoreSession({
@@ -161,7 +164,7 @@ export abstract class LocalIntegrationAuthenticationProvider<
 		ignoreErrors: boolean;
 	}): Promise<StoredSession | undefined> {
 		const key = this.getLocalSecretKey(sessionId);
-		return this.readSecret(key, ignoreErrors);
+		return this.readStoredSession(key, ignoreErrors);
 	}
 }
 
@@ -180,18 +183,18 @@ export abstract class CloudIntegrationAuthenticationProvider<
 
 	public async deleteCloudSession(descriptor?: IntegrationAuthenticationSessionDescriptor): Promise<void> {
 		const key = this.getCloudSecretKey(this.getSessionId(descriptor));
-		await this.deleteSecret(key);
+		await this.deleteStoredSession(key);
 	}
 
-	protected override async deleteAllSecrets(sessionId: string) {
+	protected override async deleteAllStoredSessions(sessionId: string) {
 		await Promise.allSettled([
-			this.deleteSecret(this.getLocalSecretKey(sessionId)),
-			this.deleteSecret(this.getCloudSecretKey(sessionId)),
+			this.deleteStoredSession(this.getLocalSecretKey(sessionId)),
+			this.deleteStoredSession(this.getCloudSecretKey(sessionId)),
 		]);
 	}
 
 	protected override async storeSession(sessionId: string, session: AuthenticationSession) {
-		await this.writeSecret(this.getCloudSecretKey(sessionId), session);
+		await this.writeStoredSession(this.getCloudSecretKey(sessionId), session);
 	}
 
 	/**
@@ -206,11 +209,11 @@ export abstract class CloudIntegrationAuthenticationProvider<
 		ignoreErrors: boolean;
 	}): Promise<StoredSession | undefined> {
 		// At first we try to restore the cloud session
-		let session = await this.readSecret(this.getCloudSecretKey(sessionId), ignoreErrors);
+		let session = await this.readStoredSession(this.getCloudSecretKey(sessionId), ignoreErrors);
 		if (session != null) return session;
 
 		// If no cloud session, we check whether we have a token with the local key
-		session = await this.readSecret(this.getLocalSecretKey(sessionId), ignoreErrors);
+		session = await this.readStoredSession(this.getLocalSecretKey(sessionId), ignoreErrors);
 		if (session != null) {
 			// Check the `expiresAt` field
 			// If it has an expiresAt property and the key is the old type, then it's a cloud session,
@@ -219,8 +222,8 @@ export abstract class CloudIntegrationAuthenticationProvider<
 			//
 			if (session.expiresAt != null) {
 				await Promise.allSettled([
-					this.deleteSecret(this.getLocalSecretKey(sessionId)),
-					this.writeSecret(this.getCloudSecretKey(sessionId), session),
+					this.deleteStoredSession(this.getLocalSecretKey(sessionId)),
+					this.writeStoredSession(this.getCloudSecretKey(sessionId), session),
 				]);
 				return session;
 			}
